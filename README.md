@@ -1,2 +1,12 @@
-# network-emulation
-Emulating network impairments (bandwidth limits, delay, jitter, packet loss) on Chameleon.
+# Emulating network impairments on Chameleon
+
+To run this experiment on Chameleon, open a terminal inside the Chameleon Jupyter environment and run
+
+```
+cd ~/work
+git clone https://github.com/teaching-on-testbeds/network-emulation
+```
+
+Then, open the notebook inside the network-emulation directory and follow along with the instructions there.
+
+
