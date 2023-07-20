@@ -45,14 +45,12 @@ import chi
 import chi.ssh
 import os 
 import utils
-# configure openstacksdk for actions unsupported by python-chi
-os_conn = chi.clients.connection()
 ```
 :::
 
 ::: {.cell .markdown}
 
-We indicate that we’re going to use the KVM@TACC site. We also need to specify the name of the Chameleon "project: that this experiment is part of. The project name will have the format “CHI-XXXXXX”, where the last part is a 6-digit number, and you can find it on your user dashboard.
+We indicate that we’re going to use the KVM@TACC site. We also need to specify the name of the Chameleon "project: that this experiment is part of. The project name will have the format “CHI-XXXXXX”, where the last part is a 6-digit number, and you can find it on your [user dashboard](https://chameleoncloud.org/user/dashboard/).
 
 In the cell below, replace the project ID with your own project ID, then run the cell.
 
@@ -64,6 +62,9 @@ In the cell below, replace the project ID with your own project ID, then run the
 chi.use_site("KVM@TACC")
 PROJECT_NAME = "CHI-XXXXXX"
 chi.set("project_name", PROJECT_NAME)
+
+# configure openstacksdk for actions unsupported by python-chi
+os_conn = chi.clients.connection()
 ```
 :::
 
@@ -132,8 +133,8 @@ We need to configure the two "experiment" links so that they will carry all traf
 
 ::: {.cell .code}
 ``` python
-netid_1 = chi.network.get_network_id("exp-net-1-" + username)
-netid_2 = chi.network.get_network_id("exp-net-2-" + username)
+netid_1 = exp_net_1['id']
+netid_2 = exp_net_2['id']
 ```
 :::
 
@@ -310,7 +311,7 @@ for kp in nova.keypairs.list():
 
 ::: {.cell .markdown}
 
-Now, we will be able to log in to our resources over SSH! Run the following cells, and observe the output - you will see an SSH command for each of the nodes in your topology.
+At this point, we should be able to log in to our resources over SSH! Run the following cells, and observe the output - you will see an SSH command for each of the nodes in your topology.
 :::
 
 ::: {.cell .code}
@@ -365,7 +366,6 @@ Next, we need to configure our resources - assign addresses to network interface
 # configure the router to forward traffic
 remote_router.run(f"sudo sysctl -w net.ipv4.ip_forward=1") 
 remote_router.run(f"sudo ufw disable") 
-remote_router.run(f"sudo apt update; sudo apt -y install net-tools") 
 ```
 :::
 
@@ -391,12 +391,390 @@ remote_juliet.run(f"sudo apt update; sudo apt -y install iperf3")
 
 ## Measure the network
 
+Next, we are going to measure the characteristics of the existing network - 
+
+* what data rate do we observe when we try to send data as fast as possible through the network?
+* how much delay is there, and how much delay variation, when we send small `ping` messages across the network and measure the time to receive a response?
+:::
+
+
+::: {.cell .markdown}
+
+We will use the `iperf3` command to send data from "romeo" to "juliet" and measure the data rate. First, we'll set up "juliet" to *receive* one data flow. Then, we'll ask "romeo" to send a data flow for ten seconds, and report back with an average data rate.
+
+:::
+
+
+::: {.cell .code}
+```python
+remote_juliet.run('iperf3 -s -1', disown=True)
+```
+:::
+
+::: {.cell .code}
+```python
+remote_romeo.run('iperf3 -c juliet')
+```
+:::
+
+::: {.cell .markdown}
+
+Next, we will use the `ping` command to send those `ping` messages (10 of them!) and responses from "romeo" to "juliet". The output will include the round trip time of each of the ten messages, and at the end, the minimum, average, maximum, and variation of the delay.
+
+:::
+
+::: {.cell .code}
+```python
+remote_romeo.run('ping -c 10 juliet')
+```
 :::
 
 ::: {.cell .markdown}
 
 ## Emulate network impairments
 
+:::
+
+
+::: {.cell .markdown}
+
+Now that we understand the characteristics of the "real" network, we can add network *impairments* that make it mimic other, *worse* networks.
+
+Note the word "impairment" - we can make the network *worse* but there is nothing we can do to make it better!
+
+For example, if the "real" network is capable of transferring data at 2 Gbps, we can *slow it down* and make it transfer data at only 100 Mbps. But we can't make it *faster*, so we won't be able to make it work at 10 Gbps.
+
+Similarly, if the delay across the "real" networks is about 1 ms, we can *add* 20 ms of delay to make the overall delay about 20 ms, but we can't make the delay be *less* than 1 ms.
+
+:::
+
+
+::: {.cell .markdown}
+
+To add network impairments, we will use the Linux traffic control system, `tc`, which can apply various "rules" to all packets *leaving* a network interface. We will apply these rules at the router, since all traffic between "romeo" and "juliet" goes through the router. 
+
+* To add additional delay and delay variation to the *round trip time* between "romeo" and "juliet", we would use `netem` and put *half* of the additional delay on the router interface that is on the same network link as "juliet" (this will apply to data from "romeo" to "juliet"), and the other *half* on the router interface that is on the same network link as "romeo" (this will apply to data from "juliet" to "romeo"). The *round trip delay* is the sum of the delays in each direction.
+* To apply random packet loss to the data going from "romeo" *to* "juliet", we would use `netem` to add loss at the router interface that is on the same network link as "juliet", since packets going to "juliet" are going to *leave* the router through this interface.
+* To slow down the data rate for data going from "romeo" *to*" "juliet", we would apply a *token bucket* filter at the router interface that is on the same network link as "juliet", since packets going to "juliet" are going to *leave* the router through this interface.
+
+We'll start by adding these impairments individually, and then we will see how to add these in combination.
+
+:::
+
+
+::: {.cell .markdown}
+One important note before we begin: in the commands that follow, we want to apply an impairment to a specific network interface on the router, and we need to refer to the interface by name. The router has multiple network interfaces, two of which are the "experiment" interfaces that we want to modify - we can see them by running `ip addr` on the router:
+:::
+
+
+::: {.cell .code}
+```python
+remote_router.run('ip addr')
+```
+:::
+
+
+::: {.cell .markdown}
+We don't know in advance what the interfaces will be named - e.g. in this experiment, the interface that connects the router to the link with "juliet" may be named `ens8` but in the next experiment it could be named `ens4`! But, in the commands that follow, we need to name the interface.
+
+Therefore, instead of using an interface name directly in these commands, we will use a command that returns the name of a particular interface. For example, the command
+:::
+
+::: {.cell .code}
+```python
+remote_router.run('ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+"')
+```
+:::
+
+
+::: {.cell .markdown}
+will return the name of the router interface that will be used to forward packets to "juliet" (10.10.2.100), and the command
+:::
+
+::: {.cell .code}
+```python
+remote_router.run('ip route get 10.10.1.100 | grep -oP "(?<=dev )[^ ]+"')
+```
+:::
+
+
+::: {.cell .markdown}
+will return the name of the router interface that will be used to forward packets to "romeo" (10.10.1.100). When we use these commands inside a `$()` within another command, the command inside the `$()` is executed and its value is returned and used in the "parent" command. This way, we can specify an interface name in the `tc` commands without even knowing what the interface name is!
+:::
+
+
+::: {.cell .markdown}
+With that in mind, let's start by deleting any `tc` elements that might already be set up on either of the router interfaces. We specify that we want to delete (`del`) whatever might be there, we specify the name of the network interface (`dev` followed by a command inside `$()` which will be replaced by an interface name!), and we specify that we want to delete everything from the `root` of the interface (in case there is a "chain" of elements applied there!)
+
+If there is no `tc` element already applied, then trying to delete it will return an error, but that's OK!
+:::
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc del dev $(ip route get 10.10.1.100 | grep -oP "(?<=dev )[^ ]+") root')
+```
+:::
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc del dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root')
+```
+:::
+
+::: {.cell .markdown}
+Now, let's use `netem` to add 10 ms of delay in *each* direction, for a total of 20 ms added to the round trip time. 
+
+On the router, we will run:
+:::
+
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.1.100 | grep -oP "(?<=dev )[^ ]+") root netem delay 10ms')
+```
+:::
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root netem delay 10ms')
+```
+:::
+
+
+
+::: {.cell .markdown}
+To test the change in delay, we will run our `ping` test again, but we'll make it a little bit longer this time:
+:::
+
+::: {.cell .code}
+```python
+remote_romeo.run('ping -c 60 juliet')
+```
+:::
+
+::: {.cell .markdown}
+
+Validate that the results now show an additional 20 ms of delay in the round trip time.
+
+:::
+
+
+::: {.cell .markdown}
+Instead of adding a constant delay (same delay applied to every packet), we may want to add delay with some *variation*. Let's *replace* the previous `netem` element with a different one, that also specifies a delay variation (second value after the word `delay`):
+
+:::
+
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc replace dev $(ip route get 10.10.1.100 | grep -oP "(?<=dev )[^ ]+") root netem delay 10ms 5ms')
+```
+:::
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc replace dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root netem delay 10ms 5ms')
+```
+:::
+
+::: {.cell .markdown}
+
+Validate that the round trip time reported by `ping` now has substantially more variation:
+
+:::
+
+::: {.cell .code}
+```python
+remote_romeo.run('ping -c 60 juliet')
+```
+:::
+
+
+::: {.cell .markdown}
+The `netem` element can also be used to add packet loss. Most networks have very little packet loss, but for this example, we'll make it more extreme - we'll specify 10% packet loss, which means that 1 out of every 10 packets will be dropped (on average). We will *only* apply this to packets going from "romeo" to "juliet", not for packets going in the other direction.
+
+First, we'll delete the existing (delay) `netem` elements, then we'll add one that emulates packet loss:
+:::
+
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc del dev $(ip route get 10.10.1.100 | grep -oP "(?<=dev )[^ ]+") root')
+```
+:::
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc del dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root')
+```
+:::
+
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root netem loss 10%')
+```
+:::
+
+::: {.cell .markdown}
+
+Validate that the `ping` results now show packet loss:
+
+:::
+
+::: {.cell .code}
+```python
+remote_romeo.run('ping -c 60 juliet')
+```
+:::
+
+::: {.cell .markdown}
+We can specify both `delay` and `loss` together in a `netem`. For example, if we want to delete any existing `tc` elements and then add:
+
+* 10ms delay with 5ms variation and 10% packet loss to packets from "romeo" to "juliet"
+* and 10ms delay with 5ms variation to packets from "juliet" to "romeo"
+
+we could do:
+:::
+
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc del dev $(ip route get 10.10.1.100 | grep -oP "(?<=dev )[^ ]+") root')
+remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.1.100 | grep -oP "(?<=dev )[^ ]+") root netem delay 10ms 5ms')
+```
+:::
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc del dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root')
+remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root netem delay 10ms 5ms loss 10%')
+```
+:::
+
+
+::: {.cell .markdown}
+
+Validate that the `ping` results now show the added delay *and* the packet loss:
+
+:::
+
+::: {.cell .code}
+```python
+remote_romeo.run('ping -c 60 juliet')
+```
+:::
+
+
+::: {.cell .markdown}
+
+To slow down the data rate of the network, we prefer to use a different `tc` element, named `htb`. Let's delete our `netem` element, and then try to add an `htb` that limits the rate of the data transfer from "romeo" to "juliet" to 100 Mbps. As packets arrive at the router, they will wait in a queue (in the order in which they arrived, so FIFO - first in, first out), and they will be released only at a rate of 100 Mbps. Also, the queue size will be limited to 0.5 MByte, so once packets arrive at the queue and find it to be full, they will be dropped. This will indicate to the sender ("romeo") that it should slow down its sending rate.
+
+:::
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc del dev $(ip route get 10.10.1.100 | grep -oP "(?<=dev )[^ ]+") root')
+```
+:::
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc del dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root')
+```
+:::
+
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root handle 1: htb default 3')
+remote_router.run('sudo tc class add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") parent 1: classid 1:3 htb rate 100Mbit')
+remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") parent 1:3 handle 3: bfifo limit 0.5MByte')
+
+```
+:::
+
+
+::: {.cell .markdown}
+
+We will validate the change using `iperf3` to generate a data flow from "romeo" to "juliet" -
+
+:::
+
+
+
+::: {.cell .code}
+```python
+remote_juliet.run('iperf3 -s -1', disown=True)
+```
+:::
+
+::: {.cell .code}
+```python
+remote_romeo.run('iperf3 -c juliet')
+```
+:::
+
+
+::: {.cell .markdown}
+
+Finally, we can also add a `netem` element *after* an `htb` token bucket, to combine rate limiting along with delay (and/or packet loss)! Try the following sequence of commands:
+
+:::
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc del dev $(ip route get 10.10.1.100 | grep -oP "(?<=dev )[^ ]+") root')
+```
+:::
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc del dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root')
+```
+:::
+
+
+::: {.cell .code}
+```python
+# only add delay to the direction from "juliet" toward "romeo"
+remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.1.100 | grep -oP "(?<=dev )[^ ]+") root netem delay 10ms')
+```
+:::
+
+
+::: {.cell .code}
+```python
+# add delay and also rate limiting in the direction from "romeo" toward "juliet"
+remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root handle 1: htb default 3')
+remote_router.run('sudo tc class add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") parent 1: classid 1:3 htb rate 100Mbit')
+remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") parent 1:3 handle 3: netem delay 10ms')
+remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") parent 3: bfifo limit 0.5MByte')
+```
+:::
+
+
+::: {.cell .markdown}
+and, validate the change:
+:::
+
+
+::: {.cell .code}
+```python
+remote_juliet.run('iperf3 -s -1', disown=True)
+```
+:::
+
+::: {.cell .code}
+```python
+remote_romeo.run('iperf3 -c juliet')
+```
+:::
+
+::: {.cell .code}
+```python
+remote_romeo.run('ping -c 60 juliet')
+```
 :::
 
 ::: {.cell .markdown}
