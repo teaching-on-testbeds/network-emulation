@@ -506,7 +506,7 @@ will return the name of the router interface that will be used to forward packet
 ::: {.cell .markdown}
 With that in mind, let's start by deleting any `tc` elements that might already be set up on either of the router interfaces. We specify that we want to delete (`del`) whatever might be there, we specify the name of the network interface (`dev` followed by a command inside `$()` which will be replaced by an interface name!), and we specify that we want to delete everything from the `root` of the interface (in case there is a "chain" of elements applied there!)
 
-If there is no `tc` element already applied, then trying to delete it will return an error, but that's OK!
+If there is no `tc` element already applied, then trying to delete it will return an error, but that's OK! You'll notice throughout this notebook, we will typically try to delete any existing element before you add any new one, but we won't be concerned if an error is raised when we try to *delete* an element.
 :::
 
 ::: {.cell .code}
@@ -637,17 +637,26 @@ We can specify both `delay` and `loss` together in a `netem`. For example, if we
 we could do:
 :::
 
-
 ::: {.cell .code}
 ```python
 remote_router.run('sudo tc qdisc del dev $(ip route get 10.10.1.100 | grep -oP "(?<=dev )[^ ]+") root')
-remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.1.100 | grep -oP "(?<=dev )[^ ]+") root netem delay 10ms 5ms')
 ```
 :::
 
 ::: {.cell .code}
 ```python
 remote_router.run('sudo tc qdisc del dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root')
+```
+:::
+
+::: {.cell .code}
+```python
+remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.1.100 | grep -oP "(?<=dev )[^ ]+") root netem delay 10ms 5ms')
+```
+:::
+
+::: {.cell .code}
+```python
 remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root netem delay 10ms 5ms loss 10%')
 ```
 :::
@@ -689,7 +698,7 @@ remote_router.run('sudo tc qdisc del dev $(ip route get 10.10.2.100 | grep -oP "
 ```python
 remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root handle 1: htb default 3')
 remote_router.run('sudo tc class add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") parent 1: classid 1:3 htb rate 100Mbit')
-remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") parent 1:3 handle 3: bfifo limit 0.5MByte')
+remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") parent 1:3 handle 3: bfifo limit 0.5MB')
 
 ```
 :::
@@ -697,7 +706,7 @@ remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "
 
 ::: {.cell .markdown}
 
-We will validate the change using `iperf3` to generate a data flow from "romeo" to "juliet" -
+We will validate the change using `iperf3` to generate a data flow from "romeo" to "juliet" - we should see a data rate that is just a little bit less than 100 Mbps.
 
 :::
 
@@ -749,7 +758,7 @@ remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.1.100 | grep -oP "
 remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") root handle 1: htb default 3')
 remote_router.run('sudo tc class add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") parent 1: classid 1:3 htb rate 100Mbit')
 remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") parent 1:3 handle 3: netem delay 10ms')
-remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") parent 3: bfifo limit 0.5MByte')
+remote_router.run('sudo tc qdisc add dev $(ip route get 10.10.2.100 | grep -oP "(?<=dev )[^ ]+") parent 3: bfifo limit 0.5MB')
 ```
 :::
 
