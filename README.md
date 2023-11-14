@@ -1,4 +1,4 @@
-# Emulating network impairments on Chameleon
+# Emulating network impairments
 
 To run this experiment on Chameleon, open a terminal inside the Chameleon Jupyter environment and run
 
