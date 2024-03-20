@@ -365,13 +365,20 @@ Next, we need to configure our resources - assign addresses to network interface
 ``` python
 # configure the router to forward traffic
 remote_router.run(f"sudo sysctl -w net.ipv4.ip_forward=1") 
-remote_router.run(f"sudo ufw disable") 
+remote_router.run(f"sudo firewall-cmd --zone=trusted --add-source=192.168.0.0/16")
+remote_router.run(f"sudo firewall-cmd --zone=trusted --add-source=172.16.0.0/12")
+remote_router.run(f"sudo firewall-cmd --zone=trusted --add-source=10.0.0.0/8")
+
 ```
 :::
 
 ::: {.cell .code}
 ``` python
 # configure the romeo host
+remote_romeo.run(f"sudo firewall-cmd --zone=trusted --add-source=192.168.0.0/16")
+remote_romeo.run(f"sudo firewall-cmd --zone=trusted --add-source=172.16.0.0/12")
+remote_romeo.run(f"sudo firewall-cmd --zone=trusted --add-source=10.0.0.0/8")
+
 remote_romeo.run(f"sudo ip route add 10.10.2.0/24 via 10.10.1.10") 
 remote_romeo.run(f"echo '10.10.2.100 juliet' | sudo tee -a /etc/hosts > /dev/null") 
 remote_romeo.run(f"sudo apt update; sudo apt -y install iperf3") 
@@ -381,6 +388,10 @@ remote_romeo.run(f"sudo apt update; sudo apt -y install iperf3")
 ::: {.cell .code}
 ``` python
 # configure the juliet host
+remote_juliet.run(f"sudo firewall-cmd --zone=trusted --add-source=192.168.0.0/16")
+remote_juliet.run(f"sudo firewall-cmd --zone=trusted --add-source=172.16.0.0/12")
+remote_juliet.run(f"sudo firewall-cmd --zone=trusted --add-source=10.0.0.0/8")
+
 remote_juliet.run(f"sudo ip route add 10.10.1.0/24 via 10.10.2.10") 
 remote_juliet.run(f"echo '10.10.1.100 romeo' | sudo tee -a /etc/hosts > /dev/null") 
 remote_juliet.run(f"sudo apt update; sudo apt -y install iperf3") 
